@@ -2,6 +2,7 @@
  * Freescale On-Chip OTP driver
  *
  * Copyright (C) 2010-2013 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Original Author: Huang Shijie <b32955@freescale.com>
  * Copyright (C) 2015 Athom B.V. All Rights Reserved.
  * Author: Jeroen Vollenbrock <jeroen@athom.com>
  *
@@ -118,42 +119,42 @@ static void *otp_base, *ccm_base;
 static struct reg_data_t reg_data, clk_data;
 
 static void __raw_writel(uint32_t data, void *ptr) {
-	debug("writing 0x%08x to 0x%08hx\n",data, ptr - otp_base);
-	*((uint32_t*)ptr) = data;
+    debug("writing 0x%08x to 0x%08hx\n",data, ptr - otp_base);
+    *((uint32_t*)ptr) = data;
 }
 
 static uint32_t __raw_readl(void *ptr) {
-	debug("reading 0x%08x at 0x%08hx\n",*((uint32_t*)ptr), ptr - otp_base);
-	return *((uint32_t*)ptr);
+    debug("reading 0x%08x at 0x%08hx\n",*((uint32_t*)ptr), ptr - otp_base);
+    return *((uint32_t*)ptr);
 }
 
 static uint32_t clk_get_rate() {
-	uint32_t result, cbcdr, cbcmr;
+    uint32_t result, cbcdr, cbcmr;
 
-	cbcdr = __raw_readl(ccm_base + HW_CCM_CBCDR);
-	cbcmr = __raw_readl(ccm_base + HW_CCM_CBCMR);
+    cbcdr = __raw_readl(ccm_base + HW_CCM_CBCDR);
+    cbcmr = __raw_readl(ccm_base + HW_CCM_CBCMR);
 
-	result = ccm_pre_periph_clk_sources[FB(cbcmr, CCM_CBCMR_PRE_PERIPH_CLK_SEL)];
-	result /= FB(cbcdr, CCM_CBCDR_AHB_PODF)+1;
-	result /= FB(cbcdr, CCM_CBCDR_IPG_PODF)+1;
+    result = ccm_pre_periph_clk_sources[FB(cbcmr, CCM_CBCMR_PRE_PERIPH_CLK_SEL)];
+    result /= FB(cbcdr, CCM_CBCDR_AHB_PODF)+1;
+    result /= FB(cbcdr, CCM_CBCDR_IPG_PODF)+1;
 
-	debug("clock rate is %zu\n", result);
-	return result;
+    debug("clock rate is %zu\n", result);
+    return result;
 }
 
 
 static int clk_set(int state) {
-	int res = 0;
-	uint32_t mask, value;
-	mask = BM_CCM_CGR2_OCOTP;
-	//WARNING: THIS IS DONE WITHOUT LOCKING, 
-	//NO SCT REGISTER AND NO LOCKS AVAILABLE IN USER-SPACE
-	value = __raw_readl(ccm_base+HW_CCM_CGR2);
-	if(state) value |= mask;
-	else value &= ~mask;
-	__raw_writel(value, ccm_base+HW_CCM_CGR2);
-	debug("clock state is %d at 0x%08x\n",state, value);
-	return res;
+    int res = 0;
+    uint32_t mask, value;
+    mask = BM_CCM_CGR2_OCOTP;
+    //WARNING: THIS IS DONE WITHOUT LOCKING, 
+    //NO SCT REGISTER AND NO LOCKS AVAILABLE IN USER-SPACE
+    value = __raw_readl(ccm_base+HW_CCM_CGR2);
+    if(state) value |= mask;
+    else value &= ~mask;
+    __raw_writel(value, ccm_base+HW_CCM_CGR2);
+    debug("clock state is %d at 0x%08x\n",state, value);
+    return res;
 }
 
 static void set_otp_timing(void)
@@ -311,78 +312,86 @@ static int fsl_otp_probe(void)
 }
 
 static int trace_reg(const char *needle, const char **haystack, size_t size) {
-	int i;
-	for(i = 0; i < size; i++) {
-		if(!strcmp(needle, haystack[i])) return i;
-	}
-	return -1;
+    int i;
+    for(i = 0; i < size; i++) {
+        if(!strcmp(needle, haystack[i])) return i;
+    }
+    return -1;
+}
+
+static void error_clear() {
+    uint32_t value;
+    value = __raw_readl(otp_base + HW_OCOTP_CTRL);
+    if (value & BM_OCOTP_CTRL_ERROR) {
+        debug("Error bit was set, unsetting!!!!!\n");
+        clk_set(1);
+        __raw_writel(BM_OCOTP_CTRL_ERROR, otp_base + HW_OCOTP_CTRL_CLR);
+        otp_wait_busy(0);
+        clk_set(0);
+    }
 }
 
 int main( int argc, const char **argv ) {
-	const char **registers;
-	int index, regsize, ret;
-	uint32_t value, new_value;
+    const char **registers;
+    int index, regsize, ret;
+    uint32_t value, new_value;
 
-	registers = &imx6q_otp_desc[0][0];
-	regsize = sizeof(imx6q_otp_desc)/sizeof(char*);
+    registers = &imx6q_otp_desc[0][0];
+    regsize = sizeof(imx6q_otp_desc)/sizeof(char*);
 
-	if((ret = fsl_otp_probe())) return ret;
+    if((ret = fsl_otp_probe())) return ret;
 
-	value = __raw_readl(otp_base + HW_OCOTP_CTRL);
-    if (value & BM_OCOTP_CTRL_ERROR) {
-    	debug("Error bit was set, unsetting!!!!!\n");
-    	clk_set(1);
-    	__raw_writel(BM_OCOTP_CTRL_ERROR, otp_base + HW_OCOTP_CTRL_CLR);
-    	otp_wait_busy(0);
-    	clk_set(0);
+    error_clear();
+
+    if(argc != 2 && argc != 4 && !!strcmp("write", argv[2])) {
+        printf("Usage %s <REGNAME> [write 0x<NEW_VALUE>]\nValid values for REGNAME are: \n%s", argv[0], registers[0]);
+        for(index = 1; index < regsize; index++)
+            printf(", %s", registers[index]);
+        printf("\n\nWARNING: Use at your own risk, you can brick your hardware if you don't know what you're doing!!!\n\n");
+        ret = -1;
+        goto out;
     }
 
-	if(argc != 2 && argc != 4 && !!strcmp("write", argv[2])) {
-		printf("Usage %s <REGNAME> [write 0x<NEW_VALUE>]\nValid values for REGNAME are: \n%s", argv[0], registers[0]);
-		for(index = 1; index < regsize; index++)
-			printf(", %s", registers[index]);
-		printf("\n\nWARNING: Use at your own risk, you can brick your hardware if you don't know what you're doing!!!\n\n");
-		ret = -1;
-		goto out;
-	}
+    index = trace_reg(argv[1], registers, regsize);
+    if(index < 0) {
+        error("Unknown register\n");
+        ret = -2;
+        goto out;
+    }
 
-	index = trace_reg(argv[1], registers, regsize);
-	if(index < 0) {
-		error("Unknown register\n");
-		ret = -2;
-		goto out;
-	}
+    ret = fsl_otp_readl(HW_OCOTP_CUST_N(index), &value);
 
-	ret = fsl_otp_readl(HW_OCOTP_CUST_N(index), &value);
+    if(argc == 4) {
+        new_value = 0;
+        if(!sscanf(argv[3], "0x%x", &new_value)) {
+            error("could not read data.\n");
+            ret = -3;
+            goto out;
+        }
+        debug("writing action received 0x%08x => 0x%08x \n", value, new_value);
 
-	if(argc == 4) {
-		new_value = 0;
-		if(!sscanf(argv[3], "0x%x", &new_value)) {
-			error("could not read data.\n");
-			ret = -3;
-			goto out;
-		}
-		debug("writing action received 0x%08x => 0x%08x \n", value, new_value);
+        if( (new_value | value) != new_value) {
+            error("current value is not contained in new value.\n");
+            ret = -4;
+            goto out;
+        }
 
-		if( (new_value | value) != new_value) {
-			error("current value is not contained in new value.\n");
-			ret = -4;
-			goto out;
-		}
+        fsl_otp_store(index, new_value);
+        fsl_otp_readl(HW_OCOTP_CUST_N(index), &value);
+        debug("writing action complete 0x%08x == 0x%08x \n", value, new_value);
+        if(value != new_value) {
+            error("write mismatch!!\n");
+            ret = -5;
+            goto out;
+        }
+    }
 
-		fsl_otp_store(index, new_value);
-		fsl_otp_readl(HW_OCOTP_CUST_N(index), &value);
-		debug("writing action complete 0x%08x == 0x%08x \n", value, new_value);
-		if(value != new_value) {
-			error("write mismatch!!\n");
-			ret = -5;
-			goto out;
-		}
-	}
-	printf("0x%08x\n", value);
+    error_clear();
+
+    printf("0x%08x\n", value);
 
 out:
-	munmap(otp_base, reg_data.size);
-	munmap(ccm_base, clk_data.size);
-	return ret;
+    munmap(otp_base, reg_data.size);
+    munmap(ccm_base, clk_data.size);
+    return ret;
 }
